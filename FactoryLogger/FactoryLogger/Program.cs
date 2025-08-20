@@ -3,7 +3,6 @@ using Serilog;
 using Serilog.Sinks.SystemConsole.Themes;
 using System;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -30,12 +29,14 @@ class Program
         {
             try // ilk olarak client olarak baslatmayi dene
             {
-                Log.Warning("client rolu alindi");
+                Log.Logger = ConfigureLogger("MACHINE 2");
+                Log.Warning("Client rolu alindi");
                 await RunAsClientAsync();
             }
-            catch (Exception ex) // eger client yoksa serveri al
+            catch (Exception) // eger client yoksa serveri al
             {
-                Log.Warning("server rolu alindi");
+                Log.Logger = ConfigureLogger("MACHINE 1");
+                Log.Warning("Server rolu alindi");
                 _isServer = true;
                 await RunAsServerAsync();
             }
@@ -44,7 +45,6 @@ class Program
     static async Task RunAsClientAsync()
     {
         _isServer = await isServerOnline(); // server online mi kontrol et
-        Log.Logger = ConfigureLogger(_isServer ? "SERVER" : "CLIENT");
 
         TcpClient client = new TcpClient(); // client nesnesi olustur
         _isServer = false;
@@ -52,7 +52,7 @@ class Program
         try
         {
             await client.ConnectAsync(ipAddress, Port); // verilen ip ve port ile baglan
-            Log.Information("sunucuyla baglanti kuruldu");
+            Log.Information("Sunucuyla baglanti kuruldu");
 
             _ = Task.Run(async () =>
             {
@@ -62,7 +62,7 @@ class Program
                     {
                         Log.Information("Sunucu baglantisi kayboldu, rol degisimi baslatiliyor.");
                         _isServer = true;
-                        shouldRestartAsClient = false; // restart değişkenini sıfırla
+                        shouldRestartAsClient = false; // restart degiskenini sifirla
                         client.Close();
                         break;
                     }
@@ -81,7 +81,7 @@ class Program
         catch (SocketException)
         {
             Log.Error("Sunucuya baglanilamadi. Sunucu rolune geciliyor.");
-            throw new Exception("Sunucuya baglanilamadi");
+            throw;
         }
         finally
         {
@@ -93,7 +93,6 @@ class Program
     static async Task RunAsServerAsync()
     {
         _isServer = true;
-        Log.Logger = ConfigureLogger("SERVER");
 
         TcpListener listener = new TcpListener(IPAddress.Any, Port);
         try
@@ -101,8 +100,11 @@ class Program
             listener.Start(); // gelen istekleri dinlemeye basla
             Log.Information("Server olarak baslatildi");
 
-            _loggingCts = new CancellationTokenSource();
-            _ = ServerLogTime(_loggingCts.Token);
+            if (_loggingCts == null)
+            {
+                _loggingCts = new CancellationTokenSource();
+                _ = ServerLogTime(_loggingCts.Token);
+            }
 
             while (true)
             {
@@ -112,14 +114,16 @@ class Program
                 {
                     Log.Information("Rol degisimi icin server kapaniyor.");
                     listener.Stop();
-                    // Loglamayı CLIENT rolüne geçiş öncesinde güncelleyelim
-                    Log.Logger = ConfigureLogger("CLIENT");
+
+                    await Task.Delay(1000);
+
+                    Log.Logger = ConfigureLogger("MACHINE 2");
                     await RunAsClientAsync();
                     Program.shouldRestartAsClient = false; // degiskeni sifirla
                     return; // ana dnguye don
                 }
 
-                // Zaten bir logging CTS varsa iptal et
+                // Client baglanir baglanmaz zaman loglamasini durdur
                 if (_loggingCts != null)
                 {
                     _loggingCts.Cancel();
@@ -140,6 +144,7 @@ class Program
         }
     }
 
+
     private static ILogger ConfigureLogger(string role) // log ayarlarini server/client rolune gore konfigure et
     {
         return new LoggerConfiguration()
@@ -158,7 +163,7 @@ class Program
             try // baglanti olup olmadigini kontrol etmek icin stream nesnesinde veri oku
             {
                 NetworkStream stream = client.GetStream(); // stream nesnesi olustur
-                byte[] buffer = new byte[1024]; // 1 bytlik buffer yerine daha büyük bir buffer kullan
+                byte[] buffer = new byte[1024]; // daha büyük buffer
 
                 while (client.Connected) // Baglantinin durumunu kontrol et
                 {
@@ -187,6 +192,13 @@ class Program
             finally
             {
                 client.Close();
+
+                // Client ayrildiginda zaman loglamasini tekrar baslat
+                if (_loggingCts == null)
+                {
+                    _loggingCts = new CancellationTokenSource();
+                    _ = ServerLogTime(_loggingCts.Token);
+                }
             }
         });
     }
@@ -220,7 +232,6 @@ class Program
                 }
             }
         }
-
     }
 
     public static async Task<bool> isServerOnline() // serverin online olup olmadigini kontrol et
@@ -256,7 +267,7 @@ class Program
         }
         catch (OperationCanceledException)
         {
-            Log.Information("Sunucu zaman loglama islemi iptal edildi.");
+            // spam yerine sessiz kapansın
         }
     }
 }

@@ -2113,11 +2113,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Efe\\Desktop\\FactoryLogger\\FactoryLogger\\FactoryLogger.csproj",
+      "projectUniqueName": "C:\\Users\\Efe\\Desktop\\factory-logger\\FactoryLogger\\FactoryLogger\\FactoryLogger.csproj",
       "projectName": "FactoryLogger",
-      "projectPath": "C:\\Users\\Efe\\Desktop\\FactoryLogger\\FactoryLogger\\FactoryLogger.csproj",
+      "projectPath": "C:\\Users\\Efe\\Desktop\\factory-logger\\FactoryLogger\\FactoryLogger\\FactoryLogger.csproj",
       "packagesPath": "C:\\Users\\Efe\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Efe\\Desktop\\FactoryLogger\\FactoryLogger\\obj\\",
+      "outputPath": "C:\\Users\\Efe\\Desktop\\factory-logger\\FactoryLogger\\FactoryLogger\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
