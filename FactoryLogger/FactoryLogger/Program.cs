@@ -9,9 +9,8 @@ using System.Threading.Tasks;
 
 class Program
 {
-    // global tanimlamalar
     private const int Port = 5000;
-    private const string ipAddress = "127.0.0.1"; // localhost
+    private const string ipAddress = "127.0.0.1";
     private static CancellationTokenSource _loggingCts;
     private static int _activeClients = 0;
 
@@ -23,27 +22,32 @@ class Program
         await RunAsResilientNodeAsync();
     }
 
-    static async Task RunAsResilientNodeAsync() // server/client olacagii belirleyen method
+    static async Task RunAsResilientNodeAsync()
     {
         while (true)
         {
             try
             {
                 Log.Logger = ConfigureLogger("CLIENT");
-                Log.Warning("client rolu alindi");
+                Log.Warning("Client rolü alındı");
                 await RunAsClientAsync();
+
+                if (_isServer && !shouldRestartAsClient)
+                {
+                    continue;
+                }
             }
             catch
             {
                 Log.Logger = ConfigureLogger("SERVER");
-                Log.Warning("server rolu alindi");
+                Log.Warning("Server rolü alındı");
                 _isServer = true;
                 await RunAsServerAsync();
             }
         }
     }
 
-    static async Task RunAsClientAsync() // client olarak calisacak method
+    static async Task RunAsClientAsync()
     {
         _isServer = await IsServerOnline();
 
@@ -54,9 +58,9 @@ class Program
         try
         {
             await client.ConnectAsync(ipAddress, Port);
-            Log.Information("server ile baglanti kuruldu");
+            Log.Information("Server ile bağlantı kuruldu");
 
-            var monitorTask = MonitorServerConnection(client, cts.Token); // client varligini takip etmek icin
+            var monitorTask = MonitorServerConnection(client, cts.Token);
             var keyTask = SendRoleSwitchRequest(cts.Token);
 
             while (client.Connected && !_isServer && !shouldRestartAsClient)
@@ -70,7 +74,7 @@ class Program
         }
         catch (SocketException)
         {
-            Log.Error("server bulunamadi. server rolune geciliyor");
+            Log.Error("Server bulunamadı. Server rolüne geçiliyor");
             throw;
         }
     }
@@ -83,7 +87,7 @@ class Program
             {
                 if (!(await IsServerOnline()))
                 {
-                    Log.Information("server baglantisi kaybldu. rol degisimi baslatiliyor");
+                    Log.Information("Server bağlantısı kayboldu, rol değişimi başlatılıyor");
                     _isServer = true;
                     shouldRestartAsClient = false;
                     client.Close();
@@ -95,7 +99,7 @@ class Program
         catch (OperationCanceledException) { }
     }
 
-    static async Task SendRoleSwitchRequest(CancellationToken token) // rol degistirme istegini gonderen method
+    static async Task SendRoleSwitchRequest(CancellationToken token)
     {
         try
         {
@@ -110,7 +114,7 @@ class Program
                         await client.ConnectAsync(ipAddress, Port);
                         if (client.Connected)
                         {
-                            Log.Information("rol degistirme istegi gonderildi");
+                            Log.Information("Rol değiştirme isteği gönderildi");
                             byte[] message = Encoding.UTF8.GetBytes("ROLE_SWITCH");
                             await client.GetStream().WriteAsync(message, 0, message.Length);
                             _isServer = true;
@@ -132,7 +136,7 @@ class Program
         try
         {
             listener.Start();
-            Log.Information("Server olarak baslatildi");
+            Log.Information("Server olarak başlatıldı");
 
             StartServerLoggingIfNoClients();
 
@@ -142,13 +146,12 @@ class Program
 
                 if (shouldRestartAsClient)
                 {
-                    Log.Information("rol degisimi icin server kapaniyor");
+                    Log.Information("Rol değişimi için server kapanıyor");
                     listener.Stop();
                     await Task.Delay(1000);
 
-                    Log.Logger = ConfigureLogger("CLIENT");
                     shouldRestartAsClient = false;
-                    await RunAsClientAsync();
+                    _isServer = false;
                     return;
                 }
 
@@ -160,7 +163,7 @@ class Program
         }
         catch (SocketException ex)
         {
-            Log.Error($"socket hatasi olustu: {ex.Message}");
+            Log.Error($"Socket hatası oluştu: {ex.Message}");
             throw;
         }
         finally
@@ -186,7 +189,7 @@ class Program
                     string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).TrimEnd('\0');
                     if (message.Equals("ROLE_SWITCH", StringComparison.OrdinalIgnoreCase))
                     {
-                        Log.Information("Rol degistirme istegi alindi.");
+                        Log.Information("Rol değiştirme isteği alındı.");
                         shouldRestartAsClient = true;
                         break;
                     }
@@ -194,7 +197,7 @@ class Program
             }
             catch (Exception ex)
             {
-                Log.Warning($"client bağlantısı kesildi veya hata olustu: {ex.Message}");
+                Log.Warning($"Client bağlantısı kesildi veya hata oluştu: {ex.Message}");
             }
             finally
             {
