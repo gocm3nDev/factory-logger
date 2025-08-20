@@ -1,5 +1,4 @@
-﻿using Microsoft.AspNetCore.Hosting.Server;
-using Serilog;
+﻿using Serilog;
 using Serilog.Sinks.SystemConsole.Themes;
 using System;
 using System.Net;
@@ -14,128 +13,154 @@ class Program
     private const int Port = 5000;
     private const string ipAddress = "127.0.0.1"; // localhost
     private static CancellationTokenSource _loggingCts;
-    private static CancellationTokenSource _listenerCts;
+    private static int _activeClients = 0;
+
     private static bool _isServer = false;
     public static bool shouldRestartAsClient = false;
 
     static async Task Main(string[] args)
     {
-        await RunAsResilientNodeAsync(); // server mi client mi olacagina karar veren metot
+        await RunAsResilientNodeAsync();
     }
 
-    static async Task RunAsResilientNodeAsync()
+    static async Task RunAsResilientNodeAsync() // server/client olacagii belirleyen method
     {
         while (true)
         {
-            try // ilk olarak client olarak baslatmayi dene
+            try
             {
-                Log.Logger = ConfigureLogger("MACHINE 2");
-                Log.Warning("Client rolu alindi");
+                Log.Logger = ConfigureLogger("CLIENT");
+                Log.Warning("client rolu alindi");
                 await RunAsClientAsync();
             }
-            catch (Exception) // eger client yoksa serveri al
+            catch
             {
-                Log.Logger = ConfigureLogger("MACHINE 1");
-                Log.Warning("Server rolu alindi");
+                Log.Logger = ConfigureLogger("SERVER");
+                Log.Warning("server rolu alindi");
                 _isServer = true;
                 await RunAsServerAsync();
             }
         }
     }
-    static async Task RunAsClientAsync()
-    {
-        _isServer = await isServerOnline(); // server online mi kontrol et
 
-        TcpClient client = new TcpClient(); // client nesnesi olustur
+    static async Task RunAsClientAsync() // client olarak calisacak method
+    {
+        _isServer = await IsServerOnline();
+
+        using var client = new TcpClient();
         _isServer = false;
+        using var cts = new CancellationTokenSource();
 
         try
         {
-            await client.ConnectAsync(ipAddress, Port); // verilen ip ve port ile baglan
-            Log.Information("Sunucuyla baglanti kuruldu");
+            await client.ConnectAsync(ipAddress, Port);
+            Log.Information("server ile baglanti kuruldu");
 
-            _ = Task.Run(async () =>
+            var monitorTask = MonitorServerConnection(client, cts.Token); // client varligini takip etmek icin
+            var keyTask = SendRoleSwitchRequest(cts.Token);
+
+            while (client.Connected && !_isServer && !shouldRestartAsClient)
             {
-                while (client.Connected)
-                {
-                    if (!(await isServerOnline()))
-                    {
-                        Log.Information("Sunucu baglantisi kayboldu, rol degisimi baslatiliyor.");
-                        _isServer = true;
-                        shouldRestartAsClient = false; // restart degiskenini sifirla
-                        client.Close();
-                        break;
-                    }
-                    await Task.Delay(1000);
-                }
-            });
-
-            Task.Run(() => SendRoleSwitchRequest());
-
-            while (client.Connected && !_isServer) // baglanti varsa ve server degilse
-            {
-                Log.Information(DateTime.Now.ToString()); // 1 saniyede bir zaman bilgisini logla
+                Log.Information(DateTime.Now.ToString());
                 await Task.Delay(1000);
             }
+
+            cts.Cancel();
+            await Task.WhenAll(monitorTask, keyTask);
         }
         catch (SocketException)
         {
-            Log.Error("Sunucuya baglanilamadi. Sunucu rolune geciliyor.");
+            Log.Error("server bulunamadi. server rolune geciliyor");
             throw;
         }
-        finally
+    }
+
+    static async Task MonitorServerConnection(TcpClient client, CancellationToken token)
+    {
+        try
         {
-            if (client.Connected) // eger client bagliysa baglantiyi kapat
-                client.Close();
+            while (client.Connected && !token.IsCancellationRequested)
+            {
+                if (!(await IsServerOnline()))
+                {
+                    Log.Information("server baglantisi kaybldu. rol degisimi baslatiliyor");
+                    _isServer = true;
+                    shouldRestartAsClient = false;
+                    client.Close();
+                    break;
+                }
+                await Task.Delay(1000, token);
+            }
         }
+        catch (OperationCanceledException) { }
+    }
+
+    static async Task SendRoleSwitchRequest(CancellationToken token) // rol degistirme istegini gonderen method
+    {
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                if (Console.KeyAvailable)
+                {
+                    var keyInfo = Console.ReadKey(true);
+                    if (keyInfo.Key == ConsoleKey.R && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+                    {
+                        using var client = new TcpClient();
+                        await client.ConnectAsync(ipAddress, Port);
+                        if (client.Connected)
+                        {
+                            Log.Information("rol degistirme istegi gonderildi");
+                            byte[] message = Encoding.UTF8.GetBytes("ROLE_SWITCH");
+                            await client.GetStream().WriteAsync(message, 0, message.Length);
+                            _isServer = true;
+                            break;
+                        }
+                    }
+                }
+                await Task.Delay(100, token);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     static async Task RunAsServerAsync()
     {
         _isServer = true;
+        var listener = new TcpListener(IPAddress.Any, Port);
 
-        TcpListener listener = new TcpListener(IPAddress.Any, Port);
         try
         {
-            listener.Start(); // gelen istekleri dinlemeye basla
+            listener.Start();
             Log.Information("Server olarak baslatildi");
 
-            if (_loggingCts == null)
-            {
-                _loggingCts = new CancellationTokenSource();
-                _ = ServerLogTime(_loggingCts.Token);
-            }
+            StartServerLoggingIfNoClients();
 
             while (true)
             {
-                var client = await listener.AcceptTcpClientAsync(); // client baglantisi kabul et
+                var client = await listener.AcceptTcpClientAsync();
 
-                if (Program.shouldRestartAsClient)
+                if (shouldRestartAsClient)
                 {
-                    Log.Information("Rol degisimi icin server kapaniyor.");
+                    Log.Information("rol degisimi icin server kapaniyor");
                     listener.Stop();
-
                     await Task.Delay(1000);
 
-                    Log.Logger = ConfigureLogger("MACHINE 2");
+                    Log.Logger = ConfigureLogger("CLIENT");
+                    shouldRestartAsClient = false;
                     await RunAsClientAsync();
-                    Program.shouldRestartAsClient = false; // degiskeni sifirla
-                    return; // ana dnguye don
+                    return;
                 }
 
-                // Client baglanir baglanmaz zaman loglamasini durdur
-                if (_loggingCts != null)
-                {
-                    _loggingCts.Cancel();
-                    _loggingCts = null;
-                }
+                Interlocked.Increment(ref _activeClients);
+                StopServerLoggingIfClientsExist();
 
-                _ = HandleClientConnectionAsync(client); // client baglantisini asenkron olarak ele al
+                _ = HandleClientConnectionAsync(client);
             }
         }
         catch (SocketException ex)
         {
-            Log.Error($"Socket hatasi olustu: {ex.Message}");
+            Log.Error($"socket hatasi olustu: {ex.Message}");
             throw;
         }
         finally
@@ -144,8 +169,86 @@ class Program
         }
     }
 
+    static async Task HandleClientConnectionAsync(TcpClient client)
+    {
+        await Task.Run(async () =>
+        {
+            try
+            {
+                var stream = client.GetStream();
+                byte[] buffer = new byte[1024];
 
-    private static ILogger ConfigureLogger(string role) // log ayarlarini server/client rolune gore konfigure et
+                while (client.Connected)
+                {
+                    int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                    if (bytesRead == 0) break;
+
+                    string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).TrimEnd('\0');
+                    if (message.Equals("ROLE_SWITCH", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log.Information("Rol degistirme istegi alindi.");
+                        shouldRestartAsClient = true;
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"client bağlantısı kesildi veya hata olustu: {ex.Message}");
+            }
+            finally
+            {
+                client.Close();
+                Interlocked.Decrement(ref _activeClients);
+                StartServerLoggingIfNoClients();
+            }
+        });
+    }
+
+    public static async Task<bool> IsServerOnline()
+    {
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(ipAddress, Port);
+            return client.Connected;
+        }
+        catch { return false; }
+    }
+
+    private static async Task ServerLogTime(CancellationToken token)
+    {
+        try
+        {
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                Log.Information(DateTime.Now.ToString());
+                await Task.Delay(1000, token);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private static void StartServerLoggingIfNoClients()
+    {
+        if (_activeClients == 0 && _loggingCts == null)
+        {
+            _loggingCts = new CancellationTokenSource();
+            _ = ServerLogTime(_loggingCts.Token);
+        }
+    }
+
+    private static void StopServerLoggingIfClientsExist()
+    {
+        if (_activeClients > 0 && _loggingCts != null)
+        {
+            _loggingCts.Cancel();
+            _loggingCts = null;
+        }
+    }
+
+    private static ILogger ConfigureLogger(string role)
     {
         return new LoggerConfiguration()
             .MinimumLevel.Debug()
@@ -154,120 +257,5 @@ class Program
                 outputTemplate: "[{Timestamp:HH:mm:ss} " + role + " {Level:u3}] {Message:lj}{NewLine}{Exception}"
             )
             .CreateLogger();
-    }
-
-    static async Task HandleClientConnectionAsync(TcpClient client) // client isteklerini ele al
-    {
-        await Task.Run(async () =>
-        {
-            try // baglanti olup olmadigini kontrol etmek icin stream nesnesinde veri oku
-            {
-                NetworkStream stream = client.GetStream(); // stream nesnesi olustur
-                byte[] buffer = new byte[1024]; // daha büyük buffer
-
-                while (client.Connected) // Baglantinin durumunu kontrol et
-                {
-                    int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-
-                    if (bytesRead == 0) // Eger baglanti kapandiysa donguden cik
-                    {
-                        break;
-                    }
-
-                    string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).TrimEnd('\0');
-
-                    if (message.Equals("ROLE_SWITCH", StringComparison.OrdinalIgnoreCase)) // eger mesaj rol degistirme istegi ise
-                    {
-                        Log.Information("Rol degistirme istegi alindi.");
-                        Program.shouldRestartAsClient = true;
-                        _listenerCts?.Cancel();
-                        break;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Warning($"Client baglantisi kesildi veya hata olustu: {ex.Message}");
-            }
-            finally
-            {
-                client.Close();
-
-                // Client ayrildiginda zaman loglamasini tekrar baslat
-                if (_loggingCts == null)
-                {
-                    _loggingCts = new CancellationTokenSource();
-                    _ = ServerLogTime(_loggingCts.Token);
-                }
-            }
-        });
-    }
-
-    static async Task SendRoleSwitchRequest() // client => server rol degistirme istegi gonder
-    {
-        while (true)
-        {
-            ConsoleKeyInfo keyInfo = Console.ReadKey(true);
-
-            if (keyInfo.Key == ConsoleKey.R && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
-            {
-                try
-                {
-                    using (TcpClient client = new TcpClient())
-                    {
-                        await client.ConnectAsync(ipAddress, Port).ConfigureAwait(false);
-                        if (client.Connected)
-                        {
-                            Log.Information("Rol degistirme istegi gonderiliyor.");
-                            byte[] message = Encoding.UTF8.GetBytes("ROLE_SWITCH");
-                            await client.GetStream().WriteAsync(message, 0, message.Length).ConfigureAwait(false);
-                            _isServer = true;
-                            break;
-                        }
-                    }
-                }
-                catch (SocketException)
-                {
-                    Log.Error("Rol degistirme istegi gonderilemedi.");
-                }
-            }
-        }
-    }
-
-    public static async Task<bool> isServerOnline() // serverin online olup olmadigini kontrol et
-    {
-        try
-        {
-            using (TcpClient client = new TcpClient()) // client nesnesi lusturup ip adresine ve portuna ping at
-            {
-                await client.ConnectAsync(ipAddress, Port).ConfigureAwait(false);
-                if (client.Connected) // eger baglanti basariliysa true dondur
-                    return true;
-                else
-                    return false;
-            }
-        }
-        catch (SocketException)
-        {
-            Log.Warning("Server offline");
-            return false;
-        }
-    }
-
-    private static async Task ServerLogTime(CancellationToken cancellationToken)
-    {
-        try
-        {
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                Log.Information(DateTime.Now.ToString());
-                await Task.Delay(1000, cancellationToken);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // spam yerine sessiz kapansın
-        }
     }
 }
