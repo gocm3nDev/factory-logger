@@ -24,6 +24,8 @@ class Program
 
     static async Task RunAsResilientNodeAsync()
     {
+        ConfigureSerilog(); // default configuration
+
         while (true)
         {
             try
@@ -45,6 +47,14 @@ class Program
                 await RunAsServerAsync();
             }
         }
+    }
+
+    static void ConfigureSerilog()
+    {
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console()
+            .CreateLogger();
     }
 
     static async Task RunAsClientAsync()
